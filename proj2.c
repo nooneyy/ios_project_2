@@ -1,11 +1,11 @@
 #include <errno.h>
+#include <semaphore.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <sys/wait.h>
 #include <sys/mman.h>
-#include <semaphore.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 // Minimalni a maximalni pocet voziku, ktery program podporuje + idx v argv
 #define CART_COUNT_IDX 1
@@ -41,6 +41,9 @@
 
 #define CORRECT_ARGC_COUNT 7
 #define ERROR_EXIT_CODE 1
+
+#define FILE_NAME "proj2.out"
+#define FILE_OPEN_MODE "w+"
 
 /**
   @brief Funkce pro konverzi command-line argumentu na cislo.
@@ -81,8 +84,12 @@ bool parse_arg(char *arg, int *dest, int min, int max) {
   @return NULL pri neuspesne alokaci, jinak ukazatel na pamet
  */
 void *smalloc(size_t length) {
-  int prot = PROT_READ | PROT_WRITE; // Procesy budou moct readovat + writovat do sdilene pameti
-  int flags = MAP_SHARED | MAP_ANONYMOUS; // Pamet bude sdilena, ale anonymni - nebude se zapisovat do zadneho souboru
+  int prot =
+      PROT_READ |
+      PROT_WRITE; // Procesy budou moct readovat + writovat do sdilene pameti
+  int flags =
+      MAP_SHARED | MAP_ANONYMOUS; // Pamet bude sdilena, ale anonymni - nebude
+                                  // se zapisovat do zadneho souboru
 
   // addr je NULL - tedy vybira kernel
   // fd - file descriptor je -1, nepouzivame sdilene soubory
@@ -108,9 +115,10 @@ sem_t *semaphore_init(unsigned value) {
 
   // pshared je 1 => semafor bude sdileny mezi procesy, ne mezi vlakny
   int res = sem_init(mem, 1, value);
-  
+
   if (res == -1)
-    return NULL; // Nepovedla se inicializace semaforu, TODO: dealokace pameti???
+    return NULL; // Nepovedla se inicializace semaforu, TODO: dealokace
+                 // pameti???
 
   return mem;
 }
@@ -124,7 +132,6 @@ void semaphore_free(sem_t *sem) {
   sem_destroy(sem);
   munmap(sem, sizeof(sem_t));
 }
-
 
 int main(int argc, char **argv) {
   if (argc != CORRECT_ARGC_COUNT) {
@@ -146,40 +153,58 @@ int main(int argc, char **argv) {
       !parse_arg(argv[QUEUE_TIME_IDX], &queue_time, QUEUE_TIME_MIN,
                  QUEUE_TIME_MAX) ||
       !parse_arg(argv[CART_GAP_IDX], &cart_gap, CART_GAP_MIN, CART_GAP_MAX)) {
-    fprintf(stderr, "err: failed to parse arg\n");
+    fprintf(stderr, "err: failed to parse one or more args\n");
     return ERROR_EXIT_CODE;
   }
 
-  sem_t *s1 = semaphore_init(0);
-  sem_t *s2 = semaphore_init(0);
+  FILE *file_descriptor = fopen(FILE_NAME, FILE_OPEN_MODE);
+  int line_count = 0;
 
-  if (s1 == NULL || s2 == NULL) {
-    fprintf(stderr, "err: failed to initialize semaphores\n");
+  if (file_descriptor == NULL) {
+    fprintf(stderr, "err: could not open/create proj2.out\n");
     return ERROR_EXIT_CODE;
   }
+
+  sem_t *file_mutex = semaphore_init(1);
+
+  if (file_mutex == NULL) {
+    fprintf(stderr, "err: failed to initialize file mutex\n");
+    return ERROR_EXIT_CODE;
+  }
+
+  sem_t *writing_done = semaphore_init(0);
+
+  if (writing_done == NULL) {
+    fprintf(stderr, "err: failed to initialize writing_done semaphore\n");
+    return ERROR_EXIT_CODE;
+  }
+
+  // sem_t *s1 = semaphore_init(0);
+  // sem_t *s2 = semaphore_init(0);
+
+  // if (s1 == NULL || s2 == NULL) {
+  //   fprintf(stderr, "err: failed to initialize semaphores\n");
+  //   return ERROR_EXIT_CODE;
+  // }
 
   int ret = fork();
 
-  /* Test nasledujici posloupnosti zprav:
-    D1
-    H1
-    D2
-  */ 
   if (ret == 0) {
     // Dispecer
-    printf("D1\n");
-    sem_post(s1);
-    sem_wait(s2);
-    printf("D2\n");
+    sem_wait(file_mutex);
+    fprintf(file_descriptor, "%i: D: started\n", ++line_count);
+    sem_post(file_mutex);
+    sem_post(writing_done);
+    exit(0);
   } else {
     // Hlavni proces
-    sem_wait(s1);
-    printf("H1\n");
-    sem_post(s2);
+    sem_wait(writing_done);
+    printf("Main process\n");
     wait(NULL);
-    semaphore_free(s1);
-    semaphore_free(s2);
   }
 
+  semaphore_free(file_mutex);
+  semaphore_free(writing_done);
+  fclose(file_descriptor);
   return 0;
 }
