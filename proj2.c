@@ -133,6 +133,99 @@ void semaphore_free(sem_t *sem) {
   munmap(sem, sizeof(sem_t));
 }
 
+void write_output(FILE *file_descriptor, sem_t *file_mutex, int *line_count,
+                  char *line) {
+  sem_wait(file_mutex);
+  fprintf(file_descriptor, "%i: %s\n", ++*line_count, line);
+  sem_post(file_mutex);
+}
+
+// void visitor(int idx, FILE *file_descriptor, sem_t *file_mutex,
+// int *line_count) {
+// sem_wait(file_mutex);
+// fprintf(file_descriptor, "%i: N %i: started\n", idx, ++*line_count);
+// fprintf(file_descriptor, "%i: N %i: queue\n", idx, ++*line_count);
+// sem_post(file_mutex);
+// enqueue();
+
+// wait_for_boarding();
+// sem_wait(file_mutex);
+// fprintf(file_descriptor, "%i: N %i: boarding\n", idx, ++*line_count);
+// sem_post(file_mutex);
+// board() wait_for_unboard();
+
+// sem_wait(file_mutex);
+// fprintf(file_descriptor, "%i: N %i: leaving\n", idx, ++*line_count);
+// sem_post(file_mutex);
+//}
+
+// void cart(int idx, FILE *file_descriptor, sem_t *file_mutex, int *line_count)
+// { sem_wait(file_mutex); fprintf(file_descriptor, "%i: V %i: started\n", idx,
+// ++*line_count); sem_post(file_mutex);
+
+// while (true) {
+// enqueue();
+// wait_for_dispatcher();
+
+// if (dispatcher_signal == board) {
+// sem_wait(file_mutex);
+// fprintf(file_descriptor, "%i: V %i: boarding started\n", idx,
+//++*line_count);
+// sem_post(file_mutex);
+
+// tell_capacity_passengers_to_board();
+// wait_boarded();
+
+// sem_wait(file_mutex);
+// fprintf(file_descriptor, "%i: V %i: boarding complete\n", idx,
+//++*line_count);
+// sem_post(file_mutex);
+
+// sleep(ride_length);
+
+// wait_for_leaving_freeup();
+
+// sem_wait(file_mutex);
+// fprintf(file_descriptor, "%i: V %i: leaving started\n", idx,
+//++*line_count);
+// sem_post(file_mutex);
+
+// unboard();
+
+// sem_wait(file_mutex);
+// fprintf(file_descriptor, "%i: V %i: leaving complete\n", idx,
+//++*line_count);
+// sem_post(file_mutex);
+//} else {
+// sem_wait(file_mutex);
+// fprintf(file_descriptor, "%i: V %i: closed\n", idx, ++*line_count);
+// sem_post(file_mutex);
+// break;
+//}
+//}
+//}
+
+// void dispatcher(FILE *file_descriptor, sem_t *file_mutex, int *line_count) {
+// sem_wait(file_mutex);
+// fprintf(file_descriptor, "%i: D: started\n", ++*line_count);
+// sem_post(file_mutex);
+
+// while (!noVisitors) {
+// sem_wait(file_mutex);
+// fprintf(file_descriptor, "%i: D: next cart\n", ++*line_count);
+// sem_post(file_mutex);
+
+// next_cart_go();
+// sleep(cart_gap);
+//}
+
+// sem_wait(file_mutex);
+// fprintf(file_descriptor, "%i: D: closing\n", ++*line_count);
+// sem_post(file_mutex);
+
+// carts_die();
+//}
+
 int main(int argc, char **argv) {
   if (argc != CORRECT_ARGC_COUNT) {
     fprintf(stderr, "err: incorrect argument count\n");
@@ -158,12 +251,20 @@ int main(int argc, char **argv) {
   }
 
   FILE *file_descriptor = fopen(FILE_NAME, FILE_OPEN_MODE);
-  int line_count = 0;
+  int *line_count = smalloc(sizeof(int));
 
   if (file_descriptor == NULL) {
     fprintf(stderr, "err: could not open/create proj2.out\n");
     return ERROR_EXIT_CODE;
   }
+
+  if (line_count == NULL) {
+    fprintf(stderr,
+            "err: failed to create shared memory for output line counter\n");
+    return ERROR_EXIT_CODE;
+  }
+
+  *line_count = 0;
 
   sem_t *file_mutex = semaphore_init(1);
 
@@ -172,39 +273,49 @@ int main(int argc, char **argv) {
     return ERROR_EXIT_CODE;
   }
 
-  sem_t *writing_done = semaphore_init(0);
+  for (int idx = 0; idx <= cart_count + visitor_count; idx++) {
+    pid_t fork_return = fork();
 
-  if (writing_done == NULL) {
-    fprintf(stderr, "err: failed to initialize writing_done semaphore\n");
-    return ERROR_EXIT_CODE;
-  }
+    if (fork_return == 0) {
+      // Dite
 
-  // sem_t *s1 = semaphore_init(0);
-  // sem_t *s2 = semaphore_init(0);
+      if (idx == 0) {
+        // dispecer
+        printf("dispecer test \n");
+      } else if (idx <= cart_count) {
+        // vozik
+        printf("vozik test\n");
+      } else {
+        // navstevnik
+        printf("navstevnik test\n");
+      }
 
-  // if (s1 == NULL || s2 == NULL) {
-  //   fprintf(stderr, "err: failed to initialize semaphores\n");
-  //   return ERROR_EXIT_CODE;
-  // }
+      exit(0);
+    } else if (fork_return == -1) {
+      printf("neco se mooc pokazilo\n");
+    }
+  };
 
-  int ret = fork();
-
-  if (ret == 0) {
-    // Dispecer
-    sem_wait(file_mutex);
-    fprintf(file_descriptor, "%i: D: started\n", ++line_count);
-    sem_post(file_mutex);
-    sem_post(writing_done);
-    exit(0);
-  } else {
-    // Hlavni proces
-    sem_wait(writing_done);
-    printf("Main process\n");
+  for (int idx = 0; idx <= cart_count + visitor_count; idx++) {
     wait(NULL);
   }
 
+  // if (ret == 0) {
+  //   // Dispecer
+  //   sem_wait(file_mutex);
+  //   fprintf(file_descriptor, "%i: D: started\n", ++line_count);
+  //   sem_post(file_mutex);
+  //   sem_post(writing_done);
+  //   exit(0);
+  // } else {
+  //   // Hlavni proces
+  //   sem_wait(writing_done);
+  //   printf("Main process\n");
+  //   wait(NULL);
+  // }
+
   semaphore_free(file_mutex);
-  semaphore_free(writing_done);
+  munmap(line_count, sizeof(int));
   fclose(file_descriptor);
   return 0;
 }
