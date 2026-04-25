@@ -1,49 +1,7 @@
-#include <errno.h>
+#include "proj2.h"
 #include <semaphore.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/mman.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-// Minimalni a maximalni pocet voziku, ktery program podporuje + idx v argv
-#define CART_COUNT_IDX 1
-#define CART_COUNT_MIN 1
-#define CART_COUNT_MAX 9
-
-// Minimalni a maximalni pocet navstevniku, ktery program podporuje + idx v argv
-#define VISITOR_COUNT_IDX 2
-#define VISITOR_COUNT_MIN 1
-#define VISITOR_COUNT_MAX 9999
-
-// Minimalni a maximalni kapacita, kterou muze mit vozik + idx v argv
-#define CART_CAPACITY_IDX 3
-#define CART_CAPACITY_MIN 4
-#define CART_CAPACITY_MAX 40
-
-// Minimalni a maximalni doba jizdy voziku + idx v argv
-#define RIDE_LENGTH_IDX 4
-#define RIDE_LENGTH_MIN 0
-#define RIDE_LENGTH_MAX 1000
-
-// Minimalni a maximalni nejdelsi doba, nez navstevnik dojde do rady na atrakci
-// + idx v argv
-#define QUEUE_TIME_IDX 5
-#define QUEUE_TIME_MIN 0
-#define QUEUE_TIME_MAX 1000
-
-// Minimalni a maximalni nejmensi odstup, ktere musi od sebe voziky udrzovat +
-// idx v argv
-#define CART_GAP_IDX 5
-#define CART_GAP_MIN 0
-#define CART_GAP_MAX 100
-
-#define CORRECT_ARGC_COUNT 7
-#define ERROR_EXIT_CODE 1
-
-#define FILE_NAME "proj2.out"
-#define FILE_OPEN_MODE "w+"
 
 /**
   @brief Funkce pro konverzi command-line argumentu na cislo.
@@ -140,91 +98,134 @@ void write_output(FILE *file_descriptor, sem_t *file_mutex, int *line_count,
   sem_post(file_mutex);
 }
 
-// void visitor(int idx, FILE *file_descriptor, sem_t *file_mutex,
-// int *line_count) {
-// sem_wait(file_mutex);
-// fprintf(file_descriptor, "%i: N %i: started\n", idx, ++*line_count);
-// fprintf(file_descriptor, "%i: N %i: queue\n", idx, ++*line_count);
-// sem_post(file_mutex);
-// enqueue();
+void dispatcher(Writer writer, Shared shared, int cart_gap) {
+  sem_wait(writer.mutex);
+  fprintf(writer.file_descriptor, "%i: D: started\n", ++*(writer.line_count));
+  sem_post(writer.mutex);
 
-// wait_for_boarding();
-// sem_wait(file_mutex);
-// fprintf(file_descriptor, "%i: N %i: boarding\n", idx, ++*line_count);
-// sem_post(file_mutex);
-// board() wait_for_unboard();
+  while (true) {
+    sem_wait(shared.visitor_count_mutex);
+    if (*shared.visitor_count > 0) {
+      sem_wait(writer.mutex);
+      fprintf(writer.file_descriptor, "%i: D: next cart\n",
+              ++*writer.line_count);
+      sem_post(writer.mutex);
+      // next_cart_go();
+      // sem_post(shared.dispatcher_signal);
+    } else {
+      sem_post(shared.visitor_count_mutex);
+      break;
+    }
+    sem_post(shared.visitor_count_mutex);
+    usleep(cart_gap);
+  }
 
-// sem_wait(file_mutex);
-// fprintf(file_descriptor, "%i: N %i: leaving\n", idx, ++*line_count);
-// sem_post(file_mutex);
-//}
+  sem_wait(writer.mutex);
+  fprintf(writer.file_descriptor, "%i: D: closing\n", ++*writer.line_count);
+  sem_post(writer.mutex);
 
-// void cart(int idx, FILE *file_descriptor, sem_t *file_mutex, int *line_count)
-// { sem_wait(file_mutex); fprintf(file_descriptor, "%i: V %i: started\n", idx,
-// ++*line_count); sem_post(file_mutex);
+  *shared.dispatcher_kill_sig = true;
+  exit(0);
+}
 
-// while (true) {
-// enqueue();
-// wait_for_dispatcher();
+void visitor(Writer writer, Shared shared, int idx, int queue_time,
+             int cart_capacity) {
+  sem_wait(writer.mutex);
+  fprintf(writer.file_descriptor, "%i: N %i: started\n", ++*writer.line_count,
+          idx);
+  sem_post(writer.mutex);
 
-// if (dispatcher_signal == board) {
-// sem_wait(file_mutex);
-// fprintf(file_descriptor, "%i: V %i: boarding started\n", idx,
-//++*line_count);
-// sem_post(file_mutex);
+  usleep(queue_time);
 
-// tell_capacity_passengers_to_board();
-// wait_boarded();
+  sem_wait(writer.mutex);
+  fprintf(writer.file_descriptor, "%i: N %i: queue\n", ++*writer.line_count,
+          idx);
+  sem_post(writer.mutex);
 
-// sem_wait(file_mutex);
-// fprintf(file_descriptor, "%i: V %i: boarding complete\n", idx,
-//++*line_count);
-// sem_post(file_mutex);
+  sem_wait(shared.board_signal);
 
-// sleep(ride_length);
+  sem_wait(writer.mutex);
+  fprintf(writer.file_descriptor, "%i: N %i: boarding\n", ++*writer.line_count,
+          idx);
+  sem_post(writer.mutex);
 
-// wait_for_leaving_freeup();
+  sem_wait(shared.boarded_count_mutex);
+  sem_wait(shared.visitor_count_mutex);
+  if (++(*shared.boarded_count) == cart_capacity ||
+      *(--shared.visitor_count) == 0) {
+    sem_post(shared.go_signal);
+    *shared.boarded_count = 0;
+  }
+  sem_post(shared.boarded_count_mutex);
 
-// sem_wait(file_mutex);
-// fprintf(file_descriptor, "%i: V %i: leaving started\n", idx,
-//++*line_count);
-// sem_post(file_mutex);
+  sem_wait(shared.unboard_signal);
 
-// unboard();
+  sem_wait(writer.mutex);
+  fprintf(writer.file_descriptor, "%i: N %i: leaving\n", ++*writer.line_count,
+          idx);
+  sem_post(writer.mutex);
 
-// sem_wait(file_mutex);
-// fprintf(file_descriptor, "%i: V %i: leaving complete\n", idx,
-//++*line_count);
-// sem_post(file_mutex);
-//} else {
-// sem_wait(file_mutex);
-// fprintf(file_descriptor, "%i: V %i: closed\n", idx, ++*line_count);
-// sem_post(file_mutex);
-// break;
-//}
-//}
-//}
+  sem_wait(shared.unboarded_count_mutex);
+  if (++*shared.unboarded_count == 20) {
+    sem_post(shared.finished_signal);
+    *shared.unboarded_count = 0;
+  }
+  sem_post(shared.unboarded_count_mutex);
 
-// void dispatcher(FILE *file_descriptor, sem_t *file_mutex, int *line_count) {
-// sem_wait(file_mutex);
-// fprintf(file_descriptor, "%i: D: started\n", ++*line_count);
-// sem_post(file_mutex);
+  exit(0);
+}
 
-// while (!noVisitors) {
-// sem_wait(file_mutex);
-// fprintf(file_descriptor, "%i: D: next cart\n", ++*line_count);
-// sem_post(file_mutex);
+void cart(Writer writer, Shared shared, int idx, int cart_capacity,
+          int ride_length, int cart_count) {
+  sem_wait(writer.mutex);
+  fprintf(writer.file_descriptor, "%i: V %i: started\n", ++*writer.line_count,
+          idx);
+  sem_post(writer.mutex);
 
-// next_cart_go();
-// sleep(cart_gap);
-//}
+  while (!shared.dispatcher_kill_sig) {
+    sem_wait(shared.ready_cart_sems[idx]);
+    sem_wait(writer.mutex);
+    fprintf(writer.file_descriptor, "%i: V %i: boarding started\n",
+            ++*writer.line_count, idx);
+    sem_post(writer.mutex);
 
-// sem_wait(file_mutex);
-// fprintf(file_descriptor, "%i: D: closing\n", ++*line_count);
-// sem_post(file_mutex);
+    for (unsigned idx = 0; idx < cart_capacity; idx++)
+      sem_post(shared.board_signal);
 
-// carts_die();
-//}
+    sem_wait(shared.boarding_done);
+
+    sem_wait(writer.mutex);
+    fprintf(writer.file_descriptor, "%i: V %i: boarding complete\n",
+            ++*writer.line_count, idx);
+    sem_post(writer.mutex);
+
+    usleep(ride_length);
+
+    sem_wait(shared.finished_cart_sems[idx]);
+
+    sem_wait(writer.mutex);
+    fprintf(writer.file_descriptor, "%i: V %i: leaving started\n",
+            ++*writer.line_count, idx);
+    sem_post(writer.mutex);
+
+    for (unsigned idx = 0; idx < cart_capacity; idx++)
+      sem_post(shared.unboard_signal);
+
+    sem_wait(shared.unboarding_done);
+
+    sem_wait(writer.mutex);
+    fprintf(writer.file_descriptor, "%i: V %i: leaving complete\n",
+            ++*writer.line_count, idx);
+    sem_post(writer.mutex);
+  }
+
+  sem_wait(writer.mutex);
+  fprintf(writer.file_descriptor, "%i: V %i: closed\n", ++*writer.line_count,
+          idx);
+  sem_post(writer.mutex);
+
+  exit(0);
+}
 
 int main(int argc, char **argv) {
   if (argc != CORRECT_ARGC_COUNT) {
@@ -250,6 +251,8 @@ int main(int argc, char **argv) {
     return ERROR_EXIT_CODE;
   }
 
+  Writer writer;
+
   FILE *file_descriptor = fopen(FILE_NAME, FILE_OPEN_MODE);
   int *line_count = smalloc(sizeof(int));
 
@@ -258,6 +261,8 @@ int main(int argc, char **argv) {
     return ERROR_EXIT_CODE;
   }
 
+  writer.file_descriptor = file_descriptor;
+
   if (line_count == NULL) {
     fprintf(stderr,
             "err: failed to create shared memory for output line counter\n");
@@ -265,6 +270,7 @@ int main(int argc, char **argv) {
   }
 
   *line_count = 0;
+  writer.line_count = line_count;
 
   sem_t *file_mutex = semaphore_init(1);
 
@@ -272,6 +278,8 @@ int main(int argc, char **argv) {
     fprintf(stderr, "err: failed to initialize file mutex\n");
     return ERROR_EXIT_CODE;
   }
+
+  writer.mutex = file_mutex;
 
   for (int idx = 0; idx <= cart_count + visitor_count; idx++) {
     pid_t fork_return = fork();
@@ -281,13 +289,11 @@ int main(int argc, char **argv) {
 
       if (idx == 0) {
         // dispecer
-        printf("dispecer test \n");
+        // dispatcher(writer, )
       } else if (idx <= cart_count) {
         // vozik
-        printf("vozik test\n");
       } else {
         // navstevnik
-        printf("navstevnik test\n");
       }
 
       exit(0);
@@ -296,23 +302,8 @@ int main(int argc, char **argv) {
     }
   };
 
-  for (int idx = 0; idx <= cart_count + visitor_count; idx++) {
+  for (int idx = 0; idx <= cart_count + visitor_count; idx++)
     wait(NULL);
-  }
-
-  // if (ret == 0) {
-  //   // Dispecer
-  //   sem_wait(file_mutex);
-  //   fprintf(file_descriptor, "%i: D: started\n", ++line_count);
-  //   sem_post(file_mutex);
-  //   sem_post(writing_done);
-  //   exit(0);
-  // } else {
-  //   // Hlavni proces
-  //   sem_wait(writing_done);
-  //   printf("Main process\n");
-  //   wait(NULL);
-  // }
 
   semaphore_free(file_mutex);
   munmap(line_count, sizeof(int));
