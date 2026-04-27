@@ -6,7 +6,7 @@ CFLAGS = -Wall -Werror -Wextra -pedantic -std=gnu99 -lpthread
 all: proj2
 
 clean:
-	rm proj2 && rm proj2.out
+	rm -f proj2 proj2.out 
 
-proj2: proj2.c
-	$(CC) $(CFLAGS) $^ -o $@ 
+proj2: proj2.c proj2.h
+	$(CC) $(CFLAGS) $< -o $@ 
